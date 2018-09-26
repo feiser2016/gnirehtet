@@ -1,6 +1,6 @@
 [package]
 name = "gnirehtet"
-version = "2.2.1"
+version = "2.3.0"
 authors = ["Romain Vimont <rvimont@genymobile.com>"]
 
 [lib]
@@ -13,7 +13,7 @@ slab = "0.4"      # helper for mio Tokens
 log = "0.4"       # for logs
 chrono = "0.4"    # for formatting timestamp in logs
 byteorder = "1.2" # for reading/writing binary
-rand = "0.4"      # for random TCP sequence number
+rand = "0.5"      # for random TCP sequence number
 ctrlc = { version = "3.0", features = ["termination"] }     # for handling Ctrl+C
 
 [profile.release]
