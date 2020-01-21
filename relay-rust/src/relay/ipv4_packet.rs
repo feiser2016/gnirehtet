@@ -34,8 +34,8 @@ impl<'a> Ipv4Packet<'a> {
         };
         Self {
             raw: &mut raw[..ipv4_header_data.total_length() as usize],
-            ipv4_header_data: ipv4_header_data,
-            transport_header_data: transport_header_data,
+            ipv4_header_data,
+            transport_header_data,
         }
     }
 
@@ -45,8 +45,8 @@ impl<'a> Ipv4Packet<'a> {
         transport_header_data: TransportHeaderData,
     ) -> Self {
         Self {
-            raw: raw,
-            ipv4_header_data: ipv4_header_data,
+            raw,
+            ipv4_header_data,
             transport_header_data: Some(transport_header_data),
         }
     }
@@ -196,13 +196,13 @@ impl<'a> Ipv4Packet<'a> {
     }
 
     pub fn payload(&self) -> Option<&[u8]> {
-        self.transport_header_data.as_ref().map(
-            |transport_header_data| {
-                let range = self.ipv4_header_data.header_length() as usize +
-                    transport_header_data.header_length() as usize..;
+        self.transport_header_data
+            .as_ref()
+            .map(|transport_header_data| {
+                let range = self.ipv4_header_data.header_length() as usize
+                    + transport_header_data.header_length() as usize..;
                 &self.raw[range]
-            },
-        )
+            })
     }
 
     pub fn compute_checksums(&mut self) {
@@ -225,8 +225,8 @@ impl<'a> Ipv4Packet<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::relay::ipv4_header::Protocol;
     use byteorder::{BigEndian, WriteBytesExt};
-    use relay::ipv4_header::Protocol;
 
     fn create_packet() -> Vec<u8> {
         let mut raw = Vec::new();

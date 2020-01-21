@@ -14,10 +14,10 @@
  * limitations under the License.
  */
 
+use log::*;
 use std::cell::RefCell;
 use std::io;
 use std::rc::{Rc, Weak};
-use log::Level;
 
 use super::binary;
 use super::client::{Client, ClientChannel};
@@ -28,12 +28,12 @@ use super::selector::Selector;
 use super::tcp_connection::TcpConnection;
 use super::udp_connection::UdpConnection;
 
-const TAG: &'static str = "Router";
+const TAG: &str = "Router";
 
 pub struct Router {
     client: Weak<RefCell<Client>>,
     // there are typically only few connections per client, HashMap would be less efficient
-    connections: Vec<Rc<RefCell<Connection>>>,
+    connections: Vec<Rc<RefCell<dyn Connection>>>,
 }
 
 impl Router {
@@ -59,7 +59,7 @@ impl Router {
             match self.connection(selector, ipv4_packet) {
                 Ok(index) => {
                     let closed = {
-                        let connection_ref = self.connections.get_mut(index).unwrap();
+                        let connection_ref = &self.connections[index];
                         let mut connection = connection_ref.borrow_mut();
                         connection.send_to_network(selector, client_channel, ipv4_packet);
                         if connection.is_closed() {
@@ -114,18 +114,18 @@ impl Router {
         id: ConnectionId,
         client: Weak<RefCell<Client>>,
         ipv4_packet: &Ipv4Packet,
-    ) -> io::Result<Rc<RefCell<Connection>>> {
+    ) -> io::Result<Rc<RefCell<dyn Connection>>> {
         let (ipv4_header, transport_header) = ipv4_packet.headers();
         let transport_header = transport_header.expect("No transport");
         match id.protocol() {
-            Protocol::Tcp => Ok(TcpConnection::new(
+            Protocol::Tcp => Ok(TcpConnection::create(
                 selector,
                 id,
                 client,
                 ipv4_header,
                 transport_header,
             )?),
-            Protocol::Udp => Ok(UdpConnection::new(
+            Protocol::Udp => Ok(UdpConnection::create(
                 selector,
                 id,
                 client,
@@ -140,13 +140,14 @@ impl Router {
     }
 
     fn find_index(&self, id: &ConnectionId) -> Option<usize> {
-        self.connections.iter().position(|connection| {
-            connection.borrow().id() == id
-        })
+        self.connections
+            .iter()
+            .position(|connection| connection.borrow().id() == id)
     }
 
-    pub fn remove(&mut self, connection: &Connection) {
-        let index = self.connections
+    pub fn remove(&mut self, connection: &dyn Connection) {
+        let index = self
+            .connections
             .iter()
             .position(|item| {
                 // compare (thin) pointers to find the connection to remove

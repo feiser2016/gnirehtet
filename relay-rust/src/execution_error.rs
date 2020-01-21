@@ -15,11 +15,11 @@
  */
 
 use std::error;
-use std::io;
 use std::fmt;
-use std::process::ExitStatus;
+use std::io;
 #[cfg(unix)]
 use std::os::unix::process::ExitStatusExt;
+use std::process::ExitStatus;
 
 #[derive(Debug)]
 pub enum CommandExecutionError {
@@ -87,7 +87,7 @@ impl Cmd {
 impl ProcessStatusError {
     pub fn new(cmd: Cmd, status: ExitStatus) -> Self {
         Self {
-            cmd: cmd,
+            cmd,
             termination: Termination::from(status),
         }
     }
@@ -112,17 +112,14 @@ impl error::Error for ProcessStatusError {
         "Execution terminated with failure"
     }
 
-    fn cause(&self) -> Option<&error::Error> {
+    fn cause(&self) -> Option<&dyn error::Error> {
         None
     }
 }
 
 impl ProcessIoError {
     pub fn new(cmd: Cmd, error: io::Error) -> Self {
-        Self {
-            cmd: cmd,
-            error: error,
-        }
+        Self { cmd, error }
     }
 }
 
@@ -137,7 +134,7 @@ impl error::Error for ProcessIoError {
         "Execution I/O failed"
     }
 
-    fn cause(&self) -> Option<&error::Error> {
+    fn cause(&self) -> Option<&dyn error::Error> {
         Some(&self.error)
     }
 }
@@ -161,7 +158,7 @@ impl error::Error for CommandExecutionError {
         }
     }
 
-    fn cause(&self) -> Option<&error::Error> {
+    fn cause(&self) -> Option<&dyn error::Error> {
         match *self {
             CommandExecutionError::ProcessIo(ref err) => Some(err),
             CommandExecutionError::ProcessStatus(ref err) => Some(err),

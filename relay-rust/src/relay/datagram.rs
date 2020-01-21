@@ -14,9 +14,9 @@
  * limitations under the License.
  */
 
+use mio::net::UdpSocket;
 use std::cmp;
 use std::io;
-use mio::net::UdpSocket;
 
 pub const MAX_DATAGRAM_LENGTH: usize = 1 << 16;
 
@@ -59,8 +59,8 @@ where
 {
     pub fn new(read: &'a mut R, max_chunk_size: Option<usize>) -> Self {
         Self {
-            read: read,
-            max_chunk_size: max_chunk_size,
+            read,
+            max_chunk_size,
         }
     }
 }

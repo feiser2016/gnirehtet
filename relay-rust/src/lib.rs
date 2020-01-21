@@ -14,21 +14,12 @@
  * limitations under the License.
  */
 
-extern crate byteorder;
-extern crate chrono;
-#[macro_use]
-extern crate log;
-extern crate mio;
-extern crate rand;
-extern crate slab;
-
 mod relay;
-pub use relay::byte_buffer;
+pub use crate::relay::byte_buffer;
 
+use crate::relay::Relay;
 use std::io;
-use relay::Relay;
 
-pub fn relay() -> io::Result<()> {
-    const PORT: u16 = 31416;
-    Relay::new(PORT).run()
+pub fn relay(port: u16) -> io::Result<()> {
+    Relay::new(port).run()
 }

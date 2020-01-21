@@ -14,18 +14,19 @@
  * limitations under the License.
  */
 
+use log::*;
+use mio::tcp::TcpListener;
+use mio::{Event, PollOpt, Ready};
 use std::cell::RefCell;
-use std::net::{Ipv4Addr, SocketAddr};
 use std::io;
+use std::net::{Ipv4Addr, SocketAddr};
 use std::ptr;
 use std::rc::{Rc, Weak};
-use mio::{Event, PollOpt, Ready};
-use mio::tcp::TcpListener;
 
 use super::client::Client;
 use super::selector::Selector;
 
-const TAG: &'static str = "TunnelServer";
+const TAG: &str = "TunnelServer";
 
 pub struct TunnelServer {
     self_weak: Weak<RefCell<TunnelServer>>,
@@ -35,12 +36,12 @@ pub struct TunnelServer {
 }
 
 impl TunnelServer {
-    pub fn new(port: u16, selector: &mut Selector) -> io::Result<Rc<RefCell<Self>>> {
+    pub fn create(port: u16, selector: &mut Selector) -> io::Result<Rc<RefCell<Self>>> {
         let tcp_listener = Self::start_socket(port)?;
         let rc = Rc::new(RefCell::new(Self {
             self_weak: Weak::new(),
             clients: Vec::new(),
-            tcp_listener: tcp_listener,
+            tcp_listener,
             next_client_id: 0,
         }));
 
@@ -82,16 +83,18 @@ impl TunnelServer {
         let client_id = self.next_client_id;
         self.next_client_id += 1;
         let weak = self.self_weak.clone();
-        let on_client_closed = Box::new(move |client: &Client| if let Some(rc) = weak.upgrade() {
-            let mut tunnel_server = rc.borrow_mut();
-            tunnel_server.remove_client(client);
-        } else {
-            warn!(
-                target: TAG,
-                "on_client_closed called but no tunnel_server available"
-            );
+        let on_client_closed = Box::new(move |client: &Client| {
+            if let Some(rc) = weak.upgrade() {
+                let mut tunnel_server = rc.borrow_mut();
+                tunnel_server.remove_client(client);
+            } else {
+                warn!(
+                    target: TAG,
+                    "on_client_closed called but no tunnel_server available"
+                );
+            }
         });
-        let client = Client::new(client_id, selector, stream, on_client_closed)?;
+        let client = Client::create(client_id, selector, stream, on_client_closed)?;
         self.clients.push(client);
         info!(target: TAG, "Client #{} connected", client_id);
         Ok(())
@@ -99,7 +102,8 @@ impl TunnelServer {
 
     fn remove_client(&mut self, client: &Client) {
         info!(target: TAG, "Client #{} disconnected", client.id());
-        let index = self.clients
+        let index = self
+            .clients
             .iter()
             .position(|item| {
                 // compare pointers to find the client to remove

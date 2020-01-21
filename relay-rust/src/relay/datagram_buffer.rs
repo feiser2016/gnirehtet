@@ -15,6 +15,7 @@
  */
 
 use byteorder::{BigEndian, ByteOrder};
+use log::*;
 use std::io;
 
 use super::datagram::{DatagramSender, MAX_DATAGRAM_LENGTH};
@@ -22,7 +23,7 @@ use super::datagram::{DatagramSender, MAX_DATAGRAM_LENGTH};
 const HEADER_LENGTH: usize = 2;
 const MAX_BLOCK_LENGTH: usize = HEADER_LENGTH + MAX_DATAGRAM_LENGTH;
 
-const TAG: &'static str = "DatagramBuffer";
+const TAG: &str = "DatagramBuffer";
 
 /// Circular buffer to store datagrams (preserving their boundaries).
 ///
@@ -81,9 +82,7 @@ impl DatagramBuffer {
         if w != length {
             error!(
                 target: TAG,
-                "Cannot write the whole datagram to the buffer (only {}/{})",
-                w,
-                length
+                "Cannot write the whole datagram to the buffer (only {}/{})", w, length
             );
             return Err(io::Error::new(
                 io::ErrorKind::Other,
@@ -130,7 +129,7 @@ impl DatagramBuffer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use relay::datagram::tests::MockDatagramSocket;
+    use crate::relay::datagram::tests::MockDatagramSocket;
 
     fn create_datagram(length: u8) -> Vec<u8> {
         (0..length).collect()

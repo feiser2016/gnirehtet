@@ -14,13 +14,14 @@
  * limitations under the License.
  */
 
+use log::*;
 use mio::{Event, Evented, Events, Poll, PollOpt, Ready, Token};
+use slab::Slab;
 use std::io;
 use std::rc::Rc;
 use std::time::Duration;
-use slab::Slab;
 
-const TAG: &'static str = "Selector";
+const TAG: &str = "Selector";
 
 pub trait EventHandler {
     fn on_ready(&self, selector: &mut Selector, event: Event);
@@ -37,13 +38,13 @@ where
 
 pub struct Selector {
     poll: Poll,
-    handlers: Slab<Rc<EventHandler>>,
+    handlers: Slab<Rc<dyn EventHandler>>,
     // tokens to be removed after all the current poll events are executed
     tokens_to_remove: Vec<Token>,
 }
 
 impl Selector {
-    pub fn new() -> io::Result<Self> {
+    pub fn create() -> io::Result<Self> {
         Ok(Self {
             poll: Poll::new()?,
             handlers: Slab::with_capacity(1024),
@@ -109,7 +110,8 @@ impl Selector {
     pub fn run_handlers(&mut self, events: &Events) {
         for event in events {
             debug!(target: TAG, "event={:?}", event);
-            let handler = self.handlers
+            let handler = self
+                .handlers
                 .get_mut(event.token().0)
                 .expect("Token not found")
                 .clone();

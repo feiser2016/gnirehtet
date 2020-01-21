@@ -14,30 +14,31 @@
  * limitations under the License.
  */
 
-use std::net::{SocketAddr, TcpStream};
+use log::*;
+use relaylib::byte_buffer::ByteBuffer;
 use std::io::{self, Write};
+use std::net::{SocketAddr, TcpStream};
 use std::process;
 use std::str;
 use std::thread;
 use std::time::Duration;
-use relaylib::byte_buffer::ByteBuffer;
 
-const TAG: &'static str = "AdbMonitor";
+const TAG: &str = "AdbMonitor";
 
 pub trait AdbMonitorCallback {
-    fn on_new_device_connected(&self, serial: &String);
+    fn on_new_device_connected(&self, serial: &str);
 }
 
 impl<F> AdbMonitorCallback for F
 where
-    F: Fn(&String),
+    F: Fn(&str),
 {
-    fn on_new_device_connected(&self, serial: &String) {
+    fn on_new_device_connected(&self, serial: &str) {
         self(serial);
     }
 }
 pub struct AdbMonitor {
-    callback: Box<AdbMonitorCallback>,
+    callback: Box<dyn AdbMonitorCallback>,
     buf: ByteBuffer,
     connected_devices: Vec<String>,
 }
@@ -48,9 +49,9 @@ impl AdbMonitor {
     const RETRY_DELAY_ADB_DAEMON_OK: u64 = 1000;
     const RETRY_DELAY_ADB_DAEMON_KO: u64 = 5000;
 
-    pub fn new(callback: Box<AdbMonitorCallback>) -> Self {
+    pub fn new(callback: Box<dyn AdbMonitorCallback>) -> Self {
         Self {
-            callback: callback,
+            callback,
             buf: ByteBuffer::new(Self::BUFFER_SIZE),
             connected_devices: Vec::new(),
         }
@@ -76,7 +77,7 @@ impl AdbMonitor {
         if self.consume_okay(stream)? {
             loop {
                 let packet = self.next_packet(stream)?;
-                self.handle_packet(&packet);
+                self.handle_packet(packet.as_str());
             }
         }
         Ok(())
@@ -95,7 +96,7 @@ impl AdbMonitor {
         let packet_length = Self::available_packet_length(buf.peek())?;
         if let Some(len) = packet_length {
             // retrieve the content and consume the packet
-            let data = Self::to_string(&buf.peek()[4..len])?;
+            let data = Self::binary_to_string(&buf.peek()[4..len])?;
             buf.consume(len);
             Ok(Some(data))
         } else {
@@ -153,17 +154,17 @@ impl AdbMonitor {
         }
     }
 
-    fn handle_packet(&mut self, packet: &String) {
+    fn handle_packet(&mut self, packet: &str) {
         let current_connected_devices = self.parse_connected_devices(packet);
         for serial in &current_connected_devices {
             if !self.connected_devices.contains(serial) {
-                self.callback.on_new_device_connected(&serial);
+                self.callback.on_new_device_connected(serial.as_str());
             }
         }
         self.connected_devices = current_connected_devices;
     }
 
-    fn parse_connected_devices(&self, packet: &String) -> Vec<String> {
+    fn parse_connected_devices(&self, packet: &str) -> Vec<String> {
         packet
             .lines()
             .filter_map(|line| {
@@ -208,7 +209,8 @@ impl AdbMonitor {
         info!(target: TAG, "Restarting adb daemon");
         match process::Command::new("adb")
             .args(&["start-server"])
-            .status() {
+            .status()
+        {
             Ok(exit_status) => {
                 if exit_status.success() {
                     true
@@ -227,7 +229,7 @@ impl AdbMonitor {
         }
     }
 
-    fn to_string(data: &[u8]) -> io::Result<String> {
+    fn binary_to_string(data: &[u8]) -> io::Result<String> {
         let raw_content = data.to_vec();
         let content = String::from_utf8(raw_content);
         if let Ok(content) = content {
@@ -303,10 +305,10 @@ mod tests {
         let serial = Rc::new(RefCell::new(None));
         let serial_clone = serial.clone();
 
-        let mut monitor = AdbMonitor::new(Box::new(move |serial: &String| {
+        let mut monitor = AdbMonitor::new(Box::new(move |serial: &str| {
             serial_clone.replace(Some(serial.to_string()));
         }));
-        monitor.handle_packet(&"0123456789ABCDEF\tdevice\n".to_string());
+        monitor.handle_packet("0123456789ABCDEF\tdevice\n");
 
         assert_eq!("0123456789ABCDEF", serial.borrow().as_ref().unwrap());
     }
@@ -316,10 +318,10 @@ mod tests {
         let serial = Rc::new(RefCell::new(None));
         let serial_clone = serial.clone();
 
-        let mut monitor = AdbMonitor::new(Box::new(move |serial: &String| {
+        let mut monitor = AdbMonitor::new(Box::new(move |serial: &str| {
             serial_clone.replace(Some(serial.to_string()));
         }));
-        monitor.handle_packet(&"0123456789ABCDEF\toffline\n".to_string());
+        monitor.handle_packet("0123456789ABCDEF\toffline\n");
 
         assert!(serial.borrow().is_none());
     }
@@ -329,11 +331,10 @@ mod tests {
         let serials = Rc::new(RefCell::new(Vec::new()));
         let serials_clone = serials.clone();
 
-        let mut monitor = AdbMonitor::new(Box::new(move |serial: &String| {
+        let mut monitor = AdbMonitor::new(Box::new(move |serial: &str| {
             serials_clone.borrow_mut().push(serial.to_string());
         }));
-        monitor.handle_packet(&"0123456789ABCDEF\tdevice\nFEDCBA9876543210\tdevice\n"
-            .to_string());
+        monitor.handle_packet("0123456789ABCDEF\tdevice\nFEDCBA9876543210\tdevice\n");
 
         let vec = serials.borrow();
         assert_eq!(2, vec.len());
@@ -346,14 +347,12 @@ mod tests {
         let serials = Rc::new(RefCell::new(Vec::new()));
         let serials_clone = serials.clone();
 
-        let mut monitor = AdbMonitor::new(Box::new(move |serial: &String| {
+        let mut monitor = AdbMonitor::new(Box::new(move |serial: &str| {
             serials_clone.borrow_mut().push(serial.to_string());
         }));
-        monitor.handle_packet(&"0123456789ABCDEF\tdevice\nFEDCBA9876543210\tdevice\n"
-            .to_string());
-        monitor.handle_packet(&"0123456789ABCDEF\tdevice\n".to_string());
-        monitor.handle_packet(&"0123456789ABCDEF\tdevice\nFEDCBA9876543210\tdevice\n"
-            .to_string());
+        monitor.handle_packet("0123456789ABCDEF\tdevice\nFEDCBA9876543210\tdevice\n");
+        monitor.handle_packet("0123456789ABCDEF\tdevice\n");
+        monitor.handle_packet("0123456789ABCDEF\tdevice\nFEDCBA9876543210\tdevice\n");
 
         let vec = serials.borrow();
         assert_eq!(3, vec.len());

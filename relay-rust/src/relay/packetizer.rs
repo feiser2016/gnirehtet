@@ -58,11 +58,11 @@ impl Packetizer {
         }
 
         Self {
-            buffer: buffer,
-            transport_index: transport_index,
-            payload_index: payload_index,
-            ipv4_header_data: ipv4_header_data,
-            transport_header_data: transport_header_data,
+            buffer,
+            transport_index,
+            payload_index,
+            ipv4_header_data,
+            transport_header_data,
         }
     }
 
@@ -111,9 +111,8 @@ impl Packetizer {
         let total_length = self.payload_index as u16 + payload_length;
 
         self.ipv4_header_mut().set_total_length(total_length);
-        self.transport_header_mut().set_payload_length(
-            payload_length,
-        );
+        self.transport_header_mut()
+            .set_payload_length(payload_length);
 
         let mut ipv4_packet = Ipv4Packet::new(
             &mut self.buffer[..total_length as usize],
@@ -136,9 +135,9 @@ impl Packetizer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io;
+    use crate::relay::datagram::tests::MockDatagramSocket;
     use byteorder::{BigEndian, WriteBytesExt};
-    use relay::datagram::tests::MockDatagramSocket;
+    use std::io;
 
     fn create_packet() -> Vec<u8> {
         let mut raw = Vec::new();

@@ -14,14 +14,14 @@
  * limitations under the License.
  */
 
+use log::*;
+use mio::net::UdpSocket;
+use mio::{Event, PollOpt, Ready, Token};
 use std::cell::RefCell;
 use std::io;
 use std::net::{Ipv4Addr, SocketAddr};
 use std::rc::{Rc, Weak};
 use std::time::Instant;
-use log::Level;
-use mio::{Event, PollOpt, Ready, Token};
-use mio::net::UdpSocket;
 
 use super::binary;
 use super::client::{Client, ClientChannel};
@@ -33,7 +33,7 @@ use super::packetizer::Packetizer;
 use super::selector::Selector;
 use super::transport_header::TransportHeader;
 
-const TAG: &'static str = "UdpConnection";
+const TAG: &str = "UdpConnection";
 
 pub const IDLE_TIMEOUT_SECONDS: u64 = 2 * 60;
 
@@ -50,7 +50,8 @@ pub struct UdpConnection {
 }
 
 impl UdpConnection {
-    pub fn new(
+    #[allow(clippy::needless_pass_by_value)] // semantically, headers are consumed
+    pub fn create(
         selector: &mut Selector,
         id: ConnectionId,
         client: Weak<RefCell<Client>>,
@@ -62,10 +63,10 @@ impl UdpConnection {
         let packetizer = Packetizer::new(&ipv4_header, &transport_header);
         let interests = Ready::readable();
         let rc = Rc::new(RefCell::new(Self {
-            id: id,
-            client: client,
-            socket: socket,
-            interests: interests,
+            id,
+            client,
+            socket,
+            interests,
             token: Token(0), // default value, will be set afterwards
             client_to_network: DatagramBuffer::new(4 * MAX_PACKET_LENGTH),
             network_to_client: packetizer,
@@ -80,12 +81,8 @@ impl UdpConnection {
             // must anotate selector type: https://stackoverflow.com/a/44004103/1987178
             let handler =
                 move |selector: &mut Selector, event| rc2.borrow_mut().on_ready(selector, event);
-            let token = selector.register(
-                &self_ref.socket,
-                handler,
-                interests,
-                PollOpt::level(),
-            )?;
+            let token =
+                selector.register(&self_ref.socket, handler, interests, PollOpt::level())?;
             self_ref.token = token;
         }
         Ok(rc)
@@ -106,6 +103,7 @@ impl UdpConnection {
     }
 
     fn on_ready(&mut self, selector: &mut Selector, event: Event) {
+        #[allow(clippy::match_wild_err_arm)]
         match self.process(selector, event) {
             Ok(_) => (),
             Err(ref err) if err.kind() == io::ErrorKind::WouldBlock => {
@@ -192,10 +190,10 @@ impl UdpConnection {
     fn read(&mut self, selector: &mut Selector) -> io::Result<()> {
         let ipv4_packet = self.network_to_client.packetize(&mut self.socket)?;
         let client_rc = self.client.upgrade().expect("Expected client not found");
-        match client_rc.borrow_mut().send_to_client(
-            selector,
-            &ipv4_packet,
-        ) {
+        match client_rc
+            .borrow_mut()
+            .send_to_client(selector, &ipv4_packet)
+        {
             Ok(_) => {
                 cx_debug!(
                     target: TAG,
@@ -254,29 +252,35 @@ impl Connection for UdpConnection {
         _: &mut ClientChannel,
         ipv4_packet: &Ipv4Packet,
     ) {
-        match self.client_to_network.read_from(
-            ipv4_packet.payload().expect(
-                "No payload",
-            ),
-        ) {
+        match self
+            .client_to_network
+            .read_from(ipv4_packet.payload().expect("No payload"))
+        {
             Ok(_) => {
                 self.update_interests(selector);
             }
-            Err(err) => {
-                cx_warn!(
-                    target: TAG,
-                    self.id,
-                    "Cannot send to network, drop packet: {}",
-                    err
-                )
-            }
+            Err(err) => cx_warn!(
+                target: TAG,
+                self.id,
+                "Cannot send to network, drop packet: {}",
+                err
+            ),
         }
     }
 
     fn close(&mut self, selector: &mut Selector) {
         cx_info!(target: TAG, self.id, "Close");
         self.closed = true;
-        selector.deregister(&self.socket, self.token).unwrap();
+        if let Err(err) = selector.deregister(&self.socket, self.token) {
+            // do not panic, this can happen in mio
+            // see <https://github.com/Genymobile/gnirehtet/issues/136>
+            cx_warn!(
+                target: TAG,
+                self.id,
+                "Fail to deregister UDP stream: {:?}",
+                err
+            );
+        }
         // socket will be closed by RAII
     }
 

@@ -147,11 +147,15 @@ macro_rules! transport_header_common {
                 }
             }
         }
-    }
+    };
 }
 
 transport_header_common!(TransportHeader, &'a [u8], &'a TransportHeaderData);
-transport_header_common!(TransportHeaderMut, &'a mut [u8], &'a mut TransportHeaderData);
+transport_header_common!(
+    TransportHeaderMut,
+    &'a mut [u8],
+    &'a mut TransportHeaderData
+);
 
 // additional methods for the mutable version
 #[allow(dead_code)]
@@ -174,6 +178,7 @@ impl<'a> TransportHeaderMut<'a> {
 
     #[inline]
     pub fn set_payload_length(&mut self, payload_length: u16) {
+        #[allow(clippy::single_match)]
         match *self {
             TransportHeaderMut::Udp(ref mut udp_header) => {
                 udp_header.set_payload_length(payload_length)

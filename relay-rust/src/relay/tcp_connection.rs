@@ -14,15 +14,15 @@
  * limitations under the License.
  */
 
+use log::*;
+use mio::net::TcpStream;
+use mio::{Event, PollOpt, Ready, Token};
+use rand::random;
 use std::cell::RefCell;
 use std::cmp;
 use std::io;
 use std::num::Wrapping;
 use std::rc::{Rc, Weak};
-use log::Level;
-use mio::{Event, PollOpt, Ready, Token};
-use mio::net::TcpStream;
-use rand::random;
 
 use super::binary;
 use super::client::{Client, ClientChannel};
@@ -36,7 +36,7 @@ use super::stream_buffer::StreamBuffer;
 use super::tcp_header::{self, TcpHeader, TcpHeaderMut};
 use super::transport_header::{TransportHeader, TransportHeaderMut};
 
-const TAG: &'static str = "TcpConnection";
+const TAG: &str = "TcpConnection";
 
 // same value as GnirehtetService.MTU in the client
 const MTU: u16 = 0x4000;
@@ -89,8 +89,10 @@ impl TcpState {
     }
 
     fn is_closed(&self) -> bool {
-        self == &TcpState::FinWait1 || self == &TcpState::FinWait2 || self == &TcpState::Closing ||
-            self == &TcpState::LastAck
+        self == &TcpState::FinWait1
+            || self == &TcpState::FinWait2
+            || self == &TcpState::Closing
+            || self == &TcpState::LastAck
     }
 }
 
@@ -109,11 +111,11 @@ impl Tcb {
     }
 
     fn remaining_client_window(&self) -> u16 {
-        let wrapped_remaining = Wrapping(self.their_acknowledgement_number) +
-            Wrapping(self.client_window as u32) -
-            self.sequence_number;
+        let wrapped_remaining = Wrapping(self.their_acknowledgement_number)
+            + Wrapping(u32::from(self.client_window))
+            - self.sequence_number;
         let remaining = wrapped_remaining.0;
-        if remaining <= self.client_window as u32 {
+        if remaining <= u32::from(self.client_window) {
             remaining as u16
         } else {
             0
@@ -123,14 +125,14 @@ impl Tcb {
     fn numbers(&self) -> String {
         format!(
             "(seq={}, ack={})",
-            self.sequence_number,
-            self.acknowledgement_number
+            self.sequence_number, self.acknowledgement_number
         )
     }
 }
 
 impl TcpConnection {
-    pub fn new(
+    #[allow(clippy::needless_pass_by_value)] // semantically, headers are consumed
+    pub fn create(
         selector: &mut Selector,
         id: ConnectionId,
         client: Weak<RefCell<Client>>,
@@ -164,10 +166,10 @@ impl TcpConnection {
         let interests = Ready::writable();
         let rc = Rc::new(RefCell::new(Self {
             self_weak: Weak::new(),
-            id: id,
-            client: client,
-            stream: stream,
-            interests: interests,
+            id,
+            client,
+            stream,
+            interests,
             token: Token(0), // default value, will be set afterwards
             client_to_network: StreamBuffer::new(4 * MAX_PACKET_LENGTH),
             network_to_client: packetizer,
@@ -186,12 +188,8 @@ impl TcpConnection {
             // must annotate selector type: https://stackoverflow.com/a/44004103/1987178
             let handler =
                 move |selector: &mut Selector, event| rc2.borrow_mut().on_ready(selector, event);
-            let token = selector.register(
-                &self_ref.stream,
-                handler,
-                interests,
-                PollOpt::level(),
-            )?;
+            let token =
+                selector.register(&self_ref.stream, handler, interests, PollOpt::level())?;
             self_ref.token = token;
         }
         Ok(rc)
@@ -209,6 +207,7 @@ impl TcpConnection {
     }
 
     fn on_ready(&mut self, selector: &mut Selector, event: Event) {
+        #[allow(clippy::match_wild_err_arm)]
         match self.process(selector, event) {
             Ok(_) => (),
             Err(ref err) if err.kind() == io::ErrorKind::WouldBlock => {
@@ -308,19 +307,17 @@ impl TcpConnection {
             remaining_client_window > 0,
             "process_received() must not be called when window == 0"
         );
-        let max_payload_length = Some(cmp::min(remaining_client_window, MAX_PAYLOAD_LENGTH) as
-            usize);
+        let max_payload_length =
+            Some(cmp::min(remaining_client_window, MAX_PAYLOAD_LENGTH) as usize);
         Self::update_headers(
             &mut self.network_to_client,
             &self.tcb,
             tcp_header::FLAG_ACK | tcp_header::FLAG_PSH,
         );
-        // the packet is bound to the lifetime of self, so we cannot borrow self to call methods
-        // defer the other branches in a separate match-block
-        let non_lexical_lifetime_workaround = match self.network_to_client.packetize_read(
-            &mut self.stream,
-            max_payload_length,
-        ) {
+        match self
+            .network_to_client
+            .packetize_read(&mut self.stream, max_payload_length)
+        {
             Ok(Some(ipv4_packet)) => {
                 match Self::send_to_client(&self.client, selector, &ipv4_packet) {
                     Ok(_) => {
@@ -343,12 +340,7 @@ impl TcpConnection {
                         self.packet_for_client_length = Some(ipv4_packet.length());
                     }
                 };
-                Ok(Some(()))
             }
-            Ok(None) => Ok(None),
-            Err(err) => Err(err),
-        };
-        match non_lexical_lifetime_workaround {
             Ok(None) => {
                 self.eof(selector);
             }
@@ -367,7 +359,6 @@ impl TcpConnection {
                 self.send_empty_packet_to_client(selector, tcp_header::FLAG_RST);
                 self.close(selector);
             }
-            Ok(Some(_)) => (), // already handled
         }
         Ok(())
     }
@@ -439,7 +430,7 @@ impl TcpConnection {
     }
 
     #[inline]
-    fn tcp_header_of_transport<'a>(transport_header: TransportHeader<'a>) -> TcpHeader<'a> {
+    fn tcp_header_of_transport(transport_header: TransportHeader) -> TcpHeader {
         if let TransportHeader::Tcp(tcp_header) = transport_header {
             tcp_header
         } else {
@@ -448,9 +439,7 @@ impl TcpConnection {
     }
 
     #[inline]
-    fn tcp_header_of_transport_mut<'a>(
-        transport_header: TransportHeaderMut<'a>,
-    ) -> TcpHeaderMut<'a> {
+    fn tcp_header_of_transport_mut(transport_header: TransportHeaderMut) -> TcpHeaderMut {
         if let TransportHeaderMut::Tcp(tcp_header) = transport_header {
             tcp_header
         } else {
@@ -638,8 +627,8 @@ impl TcpConnection {
             );
             self.tcb.fin_sequence_number = Some(self.tcb.sequence_number.0);
             self.tcb.sequence_number += Wrapping(1); // FIN counts for 1 byte
-            // the connection will be closed by RAII, so switch immediately to LastAck
-            // (bypass CloseWait)
+                                                     // the connection will be closed by RAII, so switch immediately to LastAck
+                                                     // (bypass CloseWait)
             self.tcb.state = TcpState::LastAck;
             cx_debug!(target: TAG, self.id, "State = {:?}", self.tcb.state);
         } else if self.tcb.state == TcpState::FinWait1 {
@@ -744,10 +733,10 @@ impl TcpConnection {
             ready = Ready::writable()
         } else {
             if self.may_read() {
-                ready = ready | Ready::readable()
+                ready |= Ready::readable()
             }
             if self.may_write() {
-                ready = ready | Ready::writable()
+                ready |= Ready::writable()
             }
         }
         cx_debug!(target: TAG, self.id, "interests: {:?}", ready);
@@ -796,7 +785,16 @@ impl Connection for TcpConnection {
     fn close(&mut self, selector: &mut Selector) {
         cx_info!(target: TAG, self.id, "Close");
         self.closed = true;
-        selector.deregister(&self.stream, self.token).unwrap();
+        if let Err(err) = selector.deregister(&self.stream, self.token) {
+            // do not panic, this can happen in mio
+            // see <https://github.com/Genymobile/gnirehtet/issues/136>
+            cx_warn!(
+                target: TAG,
+                self.id,
+                "Fail to deregister TCP stream: {:?}",
+                err
+            );
+        }
         // socket will be closed by RAII
     }
 
@@ -820,9 +818,9 @@ impl PacketSource for TcpConnection {
     }
 
     fn next(&mut self, selector: &mut Selector) {
-        let len = self.packet_for_client_length.expect(
-            "next() called on empty packet source",
-        );
+        let len = self
+            .packet_for_client_length
+            .expect("next() called on empty packet source");
         cx_debug!(
             target: TAG,
             self.id,
@@ -830,7 +828,7 @@ impl PacketSource for TcpConnection {
             len,
             self.tcb.numbers()
         );
-        self.tcb.sequence_number += Wrapping(len as u32);
+        self.tcb.sequence_number += Wrapping(u32::from(len));
         self.packet_for_client_length = None;
         self.update_interests(selector);
     }

@@ -14,9 +14,9 @@
  * limitations under the License.
  */
 
-use std::mem;
-use byteorder::{BigEndian, ByteOrder};
 use super::ipv4_header::Ipv4HeaderData;
+use byteorder::{BigEndian, ByteOrder};
+use std::mem;
 
 pub const UDP_HEADER_LENGTH: u8 = 8;
 
@@ -99,7 +99,7 @@ macro_rules! udp_header_common {
                 self.data.destination_port
             }
         }
-    }
+    };
 }
 
 udp_header_common!(UdpHeader, &'a [u8], &'a UdpHeaderData);
@@ -139,7 +139,7 @@ impl<'a> UdpHeaderMut<'a> {
 
     #[inline]
     pub fn set_payload_length(&mut self, payload_length: u16) {
-        let total_length = UDP_HEADER_LENGTH as u16 + payload_length;
+        let total_length = u16::from(UDP_HEADER_LENGTH) + payload_length;
         BigEndian::write_u16(&mut self.raw[4..6], total_length);
     }
 

@@ -14,13 +14,14 @@
  * limitations under the License.
  */
 
+use log::*;
+use mio::net::TcpStream;
+use mio::{Event, PollOpt, Ready, Token};
 use std::cell::RefCell;
 use std::io::{self, Write};
 use std::mem;
 use std::net::Shutdown;
 use std::rc::Rc;
-use mio::net::TcpStream;
-use mio::{Event, PollOpt, Ready, Token};
 
 use super::binary;
 use super::close_listener::CloseListener;
@@ -31,7 +32,7 @@ use super::router::Router;
 use super::selector::Selector;
 use super::stream_buffer::StreamBuffer;
 
-const TAG: &'static str = "Client";
+const TAG: &str = "Client";
 
 pub struct Client {
     id: u32,
@@ -41,9 +42,9 @@ pub struct Client {
     client_to_network: Ipv4PacketBuffer,
     network_to_client: StreamBuffer,
     router: Router,
-    close_listener: Box<CloseListener<Client>>,
+    close_listener: Box<dyn CloseListener<Client>>,
     closed: bool,
-    pending_packet_sources: Vec<Rc<RefCell<PacketSource>>>,
+    pending_packet_sources: Vec<Rc<RefCell<dyn PacketSource>>>,
     // number of remaining bytes of "id" to send to the client before relaying any data
     pending_id_bytes: usize,
 }
@@ -64,10 +65,10 @@ impl<'a> ClientChannel<'a> {
         interests: &'a mut Ready,
     ) -> Self {
         Self {
-            network_to_client: network_to_client,
-            stream: stream,
-            token: token,
-            interests: interests,
+            network_to_client,
+            stream,
+            token,
+            interests,
         }
     }
 
@@ -108,24 +109,24 @@ impl<'a> ClientChannel<'a> {
 }
 
 impl Client {
-    pub fn new(
+    pub fn create(
         id: u32,
         selector: &mut Selector,
         stream: TcpStream,
-        close_listener: Box<CloseListener<Client>>,
+        close_listener: Box<dyn CloseListener<Client>>,
     ) -> io::Result<Rc<RefCell<Self>>> {
         // on start, we are interested only in writing (we must first send the client id)
         let interests = Ready::writable();
         let rc = Rc::new(RefCell::new(Self {
-            id: id,
-            stream: stream,
-            interests: interests,
+            id,
+            stream,
+            interests,
             token: Token(0), // default value, will be set afterwards
             client_to_network: Ipv4PacketBuffer::new(),
             network_to_client: StreamBuffer::new(16 * MAX_PACKET_LENGTH),
             router: Router::new(),
             closed: false,
-            close_listener: close_listener,
+            close_listener,
             pending_packet_sources: Vec::new(),
             pending_id_bytes: 4,
         }));
@@ -139,19 +140,15 @@ impl Client {
             // must anotate selector type: https://stackoverflow.com/a/44004103/1987178
             let handler =
                 move |selector: &mut Selector, event| rc2.borrow_mut().on_ready(selector, event);
-            let token = selector.register(
-                &self_ref.stream,
-                handler,
-                interests,
-                PollOpt::level(),
-            )?;
+            let token =
+                selector.register(&self_ref.stream, handler, interests, PollOpt::level())?;
             self_ref.token = token;
         }
         Ok(rc)
     }
 
     pub fn id(&self) -> u32 {
-        return self.id;
+        self.id
     }
 
     pub fn router(&mut self) -> &mut Router {
@@ -171,7 +168,7 @@ impl Client {
         self.closed = true;
         selector.deregister(&self.stream, self.token).unwrap();
         // shutdown only (there is no close), the socket will be closed on drop
-        if let Err(_) = self.stream.shutdown(Shutdown::Both) {
+        if self.stream.shutdown(Shutdown::Both).is_err() {
             warn!(target: TAG, "Cannot shutdown client socket");
         }
         self.router.clear(selector);
@@ -179,6 +176,7 @@ impl Client {
     }
 
     fn on_ready(&mut self, selector: &mut Selector, event: Event) {
+        #[allow(clippy::match_wild_err_arm)]
         match self.process(selector, event) {
             Ok(_) => (),
             Err(ref err) if err.kind() == io::ErrorKind::WouldBlock => {
@@ -273,7 +271,7 @@ impl Client {
         }
     }
 
-    pub fn register_pending_packet_source(&mut self, source: Rc<RefCell<PacketSource>>) {
+    pub fn register_pending_packet_source(&mut self, source: Rc<RefCell<dyn PacketSource>>) {
         self.pending_packet_sources.push(source);
     }
 
@@ -313,11 +311,8 @@ impl Client {
                     self.token,
                     &mut self.interests,
                 );
-                self.router.send_to_network(
-                    selector,
-                    &mut client_channel,
-                    packet,
-                );
+                self.router
+                    .send_to_network(selector, &mut client_channel, packet);
                 true
             }
             None => false,
@@ -331,11 +326,12 @@ impl Client {
             let consumed = {
                 let mut source = pending.borrow_mut();
                 let result = {
-                    let ipv4_packet = source.get().expect(
-                        "Unexpected pending source with no packet",
-                    );
+                    let ipv4_packet = source
+                        .get()
+                        .expect("Unexpected pending source with no packet");
                     self.send_to_client(selector, &ipv4_packet)
                 };
+                #[allow(clippy::match_wild_err_arm)]
                 match result {
                     Ok(_) => {
                         source.next(selector);

@@ -14,9 +14,9 @@
  * limitations under the License.
  */
 
+use super::ipv4_header::Ipv4HeaderData;
 use byteorder::{BigEndian, ByteOrder};
 use std::mem;
-use super::ipv4_header::Ipv4HeaderData;
 
 pub struct TcpHeader<'a> {
     raw: &'a [u8],
@@ -39,7 +39,7 @@ pub struct TcpHeaderData {
     window: u16,
 }
 
-pub const FLAG_FIN: u16 = 1 << 0;
+pub const FLAG_FIN: u16 = 1;
 pub const FLAG_SYN: u16 = 1 << 1;
 pub const FLAG_RST: u16 = 1 << 2;
 pub const FLAG_PSH: u16 = 1 << 3;
@@ -214,7 +214,7 @@ macro_rules! tcp_header_common {
                 self.data.is_ack()
             }
         }
-    }
+    };
 }
 
 tcp_header_common!(TcpHeader, &'a [u8], &'a TcpHeaderData);
@@ -267,7 +267,7 @@ impl<'a> TcpHeaderMut<'a> {
     #[inline]
     pub fn set_flags(&mut self, flags: u16) {
         self.data.flags = flags;
-        let mut data_offset_and_flags = BigEndian::read_u16(&mut self.raw[12..14]);
+        let mut data_offset_and_flags = BigEndian::read_u16(&self.raw[12..14]);
         data_offset_and_flags = data_offset_and_flags & 0xFE00 | flags & 0x1FF;
 
         BigEndian::write_u16(&mut self.raw[12..14], data_offset_and_flags);
@@ -280,8 +280,8 @@ impl<'a> TcpHeaderMut<'a> {
 
     #[inline]
     fn set_data_offset(&mut self, data_offset: u8) {
-        let mut data_offset_and_flags = BigEndian::read_u16(&mut self.raw[12..14]);
-        data_offset_and_flags = data_offset_and_flags & 0x0FFF | ((data_offset as u16) << 12);
+        let mut data_offset_and_flags = BigEndian::read_u16(&self.raw[12..14]);
+        data_offset_and_flags = data_offset_and_flags & 0x0FFF | (u16::from(data_offset) << 12);
         BigEndian::write_u16(&mut self.raw[12..14], data_offset_and_flags);
         self.data.header_length = data_offset << 2;
     }
@@ -300,13 +300,13 @@ impl<'a> TcpHeaderMut<'a> {
         // pseudo-header checksum (cf rfc793 section 3.1)
         let source = ipv4_header_data.source();
         let destination = ipv4_header_data.destination();
-        let transport_length = ipv4_header_data.total_length() -
-            ipv4_header_data.header_length() as u16;
+        let transport_length =
+            ipv4_header_data.total_length() - u16::from(ipv4_header_data.header_length());
 
         let header_length = self.header_length();
         debug_assert!(header_length % 2 == 0 && header_length >= 20);
 
-        let payload_length = transport_length - header_length as u16;
+        let payload_length = transport_length - u16::from(header_length);
         debug_assert_eq!(
             payload_length as usize,
             payload.len(),
@@ -318,7 +318,7 @@ impl<'a> TcpHeaderMut<'a> {
         sum += source & 0xFFFF;
         sum += destination >> 16;
         sum += destination & 0xFFFF;
-        sum += transport_length as u32;
+        sum += u32::from(transport_length);
 
         // reset checksum field, so that it can be added with other bytes
         self.set_checksum(0);
@@ -332,8 +332,8 @@ impl<'a> TcpHeaderMut<'a> {
             let mut p = self.raw.as_ptr();
             let end = p.offset(header_length as isize);
             while p < end {
-                hsum += *p as u32;
-                sum += *p.offset(1) as u32;
+                hsum += u32::from(*p);
+                sum += u32::from(*p.offset(1));
                 p = p.offset(2);
             }
 
@@ -341,13 +341,13 @@ impl<'a> TcpHeaderMut<'a> {
             // -1 to ignore the last if payload_length is odd
             let end = p.offset(payload_length as isize - 1);
             while p < end {
-                hsum += *p as u32;
-                sum += *p.offset(1) as u32;
+                hsum += u32::from(*p);
+                sum += u32::from(*p.offset(1));
                 p = p.offset(2);
             }
             if payload_length % 2 != 0 {
                 // if payload length is odd, the last byte is considered high-order
-                hsum += *payload.get_unchecked((payload_length - 1) as usize) as u32;
+                hsum += u32::from(*payload.get_unchecked((payload_length - 1) as usize));
             }
         }
 
@@ -364,9 +364,9 @@ impl<'a> TcpHeaderMut<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::relay::ipv4_packet::Ipv4Packet;
+    use crate::relay::transport_header::TransportHeaderMut;
     use byteorder::{BigEndian, WriteBytesExt};
-    use relay::ipv4_packet::Ipv4Packet;
-    use relay::transport_header::TransportHeaderMut;
 
     fn create_packet() -> Vec<u8> {
         let mut raw = Vec::new();
@@ -530,8 +530,16 @@ mod tests {
                 let mut sum: u32 = 0x1234 + 0x5678 + 0xA2A2 + 0x4242 + 0x0006 + 0x0018;
 
                 // header
-                sum += 0x1234 + 0x5678 + 0x0000 + 0x0111 + 0x0000 + 0x0222 + 0x5000 + 0x0000 +
-                    0x0000 + 0x0000;
+                sum += 0x1234
+                    + 0x5678
+                    + 0x0000
+                    + 0x0111
+                    + 0x0000
+                    + 0x0222
+                    + 0x5000
+                    + 0x0000
+                    + 0x0000
+                    + 0x0000;
 
                 // payload
                 sum += 0x1122 + 0xEEFF;
@@ -564,8 +572,16 @@ mod tests {
                 let mut sum: u32 = 0x1234 + 0x5678 + 0xA2A2 + 0x4242 + 0x0006 + 0x0019;
 
                 // header
-                sum += 0x1234 + 0x5678 + 0x0000 + 0x0111 + 0x0000 + 0x0222 + 0x5000 + 0x0000 +
-                    0x0000 + 0x0000;
+                sum += 0x1234
+                    + 0x5678
+                    + 0x0000
+                    + 0x0111
+                    + 0x0000
+                    + 0x0222
+                    + 0x5000
+                    + 0x0000
+                    + 0x0000
+                    + 0x0000;
 
                 // payload
                 sum += 0x1122 + 0xEEFF + 0x8800;
@@ -598,8 +614,16 @@ mod tests {
                 let mut sum: u32 = 0x1234 + 0x5678 + 0xA2A2 + 0x4242 + 0x0006 + 0x0014;
 
                 // header
-                sum += 0x1234 + 0x5678 + 0x0000 + 0x0111 + 0x0000 + 0x0222 + 0x5000 + 0x0000 +
-                    0x0000 + 0x0000;
+                sum += 0x1234
+                    + 0x5678
+                    + 0x0000
+                    + 0x0111
+                    + 0x0000
+                    + 0x0222
+                    + 0x5000
+                    + 0x0000
+                    + 0x0000
+                    + 0x0000;
 
                 while (sum & !0xFFFF) != 0 {
                     sum = (sum & 0xFFFF) + (sum >> 16);
